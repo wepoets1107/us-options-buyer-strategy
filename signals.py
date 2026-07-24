@@ -27,8 +27,8 @@ def _skew(chain, spot):
     try:
         cs = chain["calls"]
         ps = chain["puts"]
-        c_strike = spot * 0.95
-        p_strike = spot * 1.05
+        c_strike = spot * 1.05
+        p_strike = spot * 0.95
         c = cs.iloc[(cs["strike"].astype(float) - c_strike).abs().argsort()[:1]]
         p = ps.iloc[(ps["strike"].astype(float) - p_strike).abs().argsort()[:1]]
         civ = float(c["impliedVolatility"].iloc[0])
