@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>美股期权买方候选看板</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+         margin: 0; background: #f5f6f8; color: #1a1a1a; }
+  header { background: #1f2933; color: #fff; padding: 14px 20px; display: flex;
+           justify-content: space-between; align-items: center; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .meta { font-size: 13px; opacity: .8; }
+  .wrap { max-width: 1200px; margin: 18px auto; padding: 0 16px; }
+  .banner { background: #fff7e6; border: 1px solid #ffe1a8; color: #8a5a00;
+            padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+  .summary { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  .card { flex: 1; min-width: 140px; background: #fff; border-radius: 10px;
+           padding: 14px 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .card .n { font-size: 26px; font-weight: 700; }
+  .card .t { font-size: 13px; color: #667; margin-top: 2px; }
+  .call .n { color: #16a34a; }
+  .put .n { color: #dc2626; }
+  .straddle .n { color: #7c3aed; }
+  .none .n { color: #94a3b8; }
+  section { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 18px;
+            box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  section h2 { font-size: 15px; margin: 0 0 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid #eef0f3; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: #667; font-weight: 600; background: #fafbfc; }
+  tbody tr:hover { background: #f7f9fc; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .tag.call { background: #dcfce7; color: #16a34a; }
+  .tag.put { background: #fee2e2; color: #dc2626; }
+  .tag.straddle { background: #ede9fe; color: #7c3aed; }
+  .tag.none { background: #f1f5f9; color: #94a3b8; }
+  .bar { height: 6px; border-radius: 3px; background: #eef0f3; position: relative; min-width: 60px; }
+  .bar > i { position: absolute; left: 0; top: 0; height: 100%; border-radius: 3px; }
+  .bar > i.c { background: #16a34a; }
+  .bar > i.p { background: #dc2626; }
+  .bar > i.s { background: #7c3aed; }
+  .cheap-y { color: #16a34a; font-weight: 600; }
+  .cheap-n { color: #94a3b8; }
+  footer { text-align: center; color: #94a3b8; font-size: 12px; padding: 20px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>美股期权买方候选看板</h1>
+  <div class="meta" id="meta">加载中…</div>
+</header>
+<div class="wrap">
+  <div class="banner" id="banner" style="display:none"></div>
+  <div class="summary" id="summary"></div>
+  <section>
+    <h2>买 Call 候选</h2>
+    <table id="tbl-call"><thead><tr>
+      <th>标的</th><th>现价</th><th>Call分</th>
+      <th>IV%</th><th>VRP</th><th>定价移动</th><th>估计移动</th><th>到期</th><th>Call成本</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+  <section>
+    <h2>买 Put 候选</h2>
+    <table id="tbl-put"><thead><tr>
+      <th>标的</th><th>现价</th><th>Put分</th>
+      <th>IV%</th><th>VRP</th><th>定价移动</th><th>估计移动</th><th>到期</th><th>Put成本</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+  <section>
+    <h2>双买（straddle）候选</h2>
+    <table id="tbl-str"><thead><tr>
+      <th>标的</th><th>现价</th><th>双买分</th>
+      <th>IV%</th><th>VRP</th><th>定价移动</th><th>估计移动</th><th>到期</th><th>straddle成本</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+  <section>
+    <h2>全池明细</h2>
+    <table id="tbl-all"><thead><tr>
+      <th>标的</th><th>分组</th><th>方向</th><th>Call</th><th>Put</th><th>双买</th>
+      <th>IV%</th><th>VRP</th><th>便宜</th><th>定价移动</th><th>估计移动</th><th>偏度</th><th>流动性</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+</div>
+<footer>
+  本看板为「催化剂 + 波动率错配」筛选器，仅输出候选与评分，不构成任何投资建议。<br>
+  买方天然负 theta，须靠「实际移动 > 成本」盈利；财报前 IV crush 风险无法完全规避。数据来自 yfinance 免费源，可能有延迟或缺失。
+</footer>
+
+<script>
+const pct = x => (x==null? "-" : (x*100).toFixed(1) + "%");
+const num = (x,d=2) => (x==null? "-" : Number(x).toFixed(d));
+const bar = (v,cls) => `<div class="bar"><i class="${cls}" style="width:${Math.max(2,Math.min(100,v))}%"></i></div>`;
+const cheap = b => b ? '<span class="cheap-y">便宜</span>' : '<span class="cheap-n">偏贵</span>';
+
+function rowCells(r, kind){
+  // kind: 'call' | 'put' | 'straddle' —— 每个模块只显示对应评分
+  const sc = kind==="call" ? `<td>${bar(r.call_score,'c')} ${r.call_score}</td>`
+            : kind==="put" ? `<td>${bar(r.put_score,'p')} ${r.put_score}</td>`
+            : `<td>${bar(r.straddle_score,'s')} ${r.straddle_score}</td>`;
+  const cost = kind==="call" ? `${num(r.call_cost)}`
+              : kind==="put" ? `${num(r.put_cost)}`
+              : `${num(r.straddle_cost)}`;
+  return `<td>${r.ticker}</td><td>${num(r.spot)}</td>
+    ${sc}
+    <td>${num(r.iv_pctile,1)}</td><td>${num(r.vrp,3)}</td>
+    <td>${pct(r.priced_move)}</td><td>${pct(r.est_move)}</td>
+    <td>${r.near_expiry||'-'}<br><small>${r.near_dte??''}d</small></td>
+    <td>${cost}</td>`;
+}
+
+function fillTable(id, rows, kind){
+  const tb = document.querySelector(`#${id} tbody`);
+  tb.innerHTML = rows.map(r => `<tr>${rowCells(r, kind)}</tr>`).join("");
+}
+
+function main(){
+  const data = window.__SNAP__ || {generated:null, rows:[]};
+  document.getElementById("meta").textContent = "生成时间：" + (data.generated || "未知");
+  const rows = (data.rows||[]).filter(r => !r.error);
+  const call = rows.filter(r => r.label==="call");
+  const put  = rows.filter(r => r.label==="put");
+  const str  = rows.filter(r => r.label==="straddle");
+  const none = rows.filter(r => !r.label || r.label==="none");
+
+  document.getElementById("summary").innerHTML = `
+    <div class="card call"><div class="n">${call.length}</div><div class="t">买 Call</div></div>
+    <div class="card put"><div class="n">${put.length}</div><div class="t">买 Put</div></div>
+    <div class="card straddle"><div class="n">${str.length}</div><div class="t">双买</div></div>
+    <div class="card none"><div class="n">${none.length}</div><div class="t">无信号</div></div>`;
+
+  fillTable("tbl-call", call, "call");
+  fillTable("tbl-put", put, "put");
+  fillTable("tbl-str", str, "straddle");
+
+  const all = document.querySelector("#tbl-all tbody");
+  all.innerHTML = rows.map(r => `<tr>
+    <td>${r.ticker}</td><td>${r.group||''}</td>
+    <td><span class="tag ${r.label||'none'}">${(r.label||'none')}</span></td>
+    <td>${r.call_score}</td><td>${r.put_score}</td><td>${r.straddle_score}</td>
+    <td>${num(r.iv_pctile,1)}</td><td>${num(r.vrp,3)}</td><td>${cheap(r.cheap)}</td>
+    <td>${pct(r.priced_move)}</td><td>${pct(r.est_move)}</td>
+    <td>${num(r.skew,3)}</td><td>${num(r.liquidity,2)}</td>
+  </tr>`).join("");
+
+  const news = (data.new_today||[]);
+  if (news.length){
+    const b = document.getElementById("banner");
+    b.style.display = "block";
+    b.textContent = "今日新增信号：" + news.join("、");
+  }
+}
+
+// 纯静态版：数据已在生成时内联进 window.__SNAP__，无二次请求、无轮询。
+main();
+</script>
+</body>
+</html>

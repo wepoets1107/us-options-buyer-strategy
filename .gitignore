@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Virtual env
+venv/
+env/
+.venv/
+
+# Caches & generated data
+.cache/
+output/
+*.pkl
+
+# Logs
+logs/
+*.log
+
+# Local launchers (machine-specific paths)
+start_service.bat
+start_service.ps1
+
+# Scratch / probe files
+_probe.py
+_portcheck.py
+_rebuild.py
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# WorkBuddy
+.workbuddy/
