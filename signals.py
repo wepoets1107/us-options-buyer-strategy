@@ -1,4 +1,5 @@
 # 信号层：A 波动轴 / B 方向轴 / C 适配轴
+import math
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -20,6 +21,67 @@ def _pct_rank(value, series):
     if len(s) == 0:
         return 50.0
     return float((s < value).mean() * 100)
+
+
+def _norm_cdf(x):
+    """标准正态 CDF（用 math.erf 精确计算）。"""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _bs_price(S, K, T, r, sigma, kind="call"):
+    """Black-Scholes 欧式期权定价。T 为年化时间（年）。"""
+    if T <= 0 or sigma <= 0:
+        # 退化情形：返回内在价值
+        return max(S - K, 0.0) if kind == "call" else max(K - S, 0.0)
+    sqrtT = math.sqrt(T)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT)
+    d2 = d1 - sigma * sqrtT
+    if kind == "call":
+        return S * _norm_cdf(d1) - K * math.exp(-r * T) * _norm_cdf(d2)
+    return K * math.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
+
+
+def _mid_price(opt_row):
+    """期权中间价：(bid+ask)/2；bid/ask 无效则退用 lastPrice；都无效返回 0。"""
+    try:
+        b = opt_row.get("bid")
+        a = opt_row.get("ask")
+        if b == b and a == a and float(b) > 0 and float(a) > 0:
+            return 0.5 * (float(b) + float(a))
+        lp = opt_row.get("lastPrice")
+        if lp == lp and float(lp) > 0:
+            return float(lp)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _implied_vol(S, K, T, r, price, kind="call", lo=1e-4, hi=5.0, tol=1e-7, max_iter=200):
+    """二分法从期权价格反解 IV。无解（价格低于内在价值/异常）返回 None。"""
+    if price is None or price <= 0:
+        return None
+    if kind == "call":
+        intrinsic = max(S - K * math.exp(-r * T), 0.0)
+    else:
+        intrinsic = max(K * math.exp(-r * T) - S, 0.0)
+    if price <= intrinsic * (1.0 - 1e-9):
+        return None
+    f_lo = _bs_price(S, K, T, r, lo, kind) - price
+    f_hi = _bs_price(S, K, T, r, hi, kind) - price
+    if f_lo * f_hi > 0:
+        return None
+    for _ in range(max_iter):
+        mid = 0.5 * (lo + hi)
+        f_mid = _bs_price(S, K, T, r, mid, kind) - price
+        if abs(f_mid) < tol:
+            return mid
+        if f_lo * f_mid < 0:
+            hi = mid
+            f_hi = f_mid
+        else:
+            lo = mid
+            f_lo = f_mid
+    return 0.5 * (lo + hi)
 
 
 def _skew(chain, spot):
@@ -99,10 +161,27 @@ def compute_signals(ticker, as_of=None):
         res["error"] = "no_atm"
         return res
 
-    atm_iv = float(c1["impliedVolatility"])
-    atm_put_iv = float(p1["impliedVolatility"])
+    # ---- ATM IV：用 BS 从 ATM 期权中间价反解（替代 yfinance 的 impliedVolatility 坏字段）----
+    _T = max(float(res["near_dte"]) / 365.0, 1e-6)
+    _r = 0.0  # 无风险利率近似（短期期权对 IV 影响 <0.5%）
+    _iv_call = _implied_vol(spot, float(c1["strike"]), _T, _r, _mid_price(c1), "call")
+    _iv_put = _implied_vol(spot, float(p1["strike"]), _T, _r, _mid_price(p1), "put")
+    if _iv_call is None and _iv_put is None:
+        # 反解全部失败（极端脏数据），回退到 yfinance 原值，避免崩溃
+        atm_iv = float(c1["impliedVolatility"])
+        atm_put_iv = float(p1["impliedVolatility"])
+    elif _iv_call is None:
+        atm_iv = atm_put_iv = _iv_put
+    elif _iv_put is None:
+        atm_iv = atm_put_iv = _iv_call
+    else:
+        # call/put 反解通常接近，取均值更稳
+        atm_iv = 0.5 * (_iv_call + _iv_put)
+        atm_put_iv = atm_iv
     res["atm_iv"] = atm_iv
     res["atm_put_iv"] = atm_put_iv
+    res["atm_iv_bs_call"] = _iv_call
+    res["atm_iv_bs_put"] = _iv_put
 
     # ---- A1 IV 百分位（近似：当前 ATM IV 对历史 30 日 RV 分布排位）----
     rv_series = _rolling_rv(closes, 30)
@@ -117,7 +196,11 @@ def compute_signals(ticker, as_of=None):
     if len(near) >= 2:
         ch2 = get_chain(ticker, near[1][0])
         c2 = atm_row(ch2["calls"], spot)
-        iv2 = float(c2["impliedVolatility"]) if c2 is not None else atm_iv
+        if c2 is not None:
+            _iv2 = _implied_vol(spot, float(c2["strike"]), _T, _r, _mid_price(c2), "call")
+            iv2 = _iv2 if _iv2 is not None else atm_iv
+        else:
+            iv2 = atm_iv
         res["term_ratio"] = atm_iv / iv2 if iv2 else 1.0
     else:
         res["term_ratio"] = 1.0
